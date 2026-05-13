@@ -11,6 +11,24 @@ import {
 
 type TabType = 'tasks' | 'calendar' | 'thoughts' | 'stats';
 type SheetType = 'addTask' | 'settings' | 'addNote' | 'pomodoro' | 'rules' | null;
+type EditingTask = { kind: 'default'; id: HabitType } | { kind: 'custom'; id: string };
+
+function parseDurationDraft(duration: string | undefined): { tagType: 'time' | 'custom'; timeVal: string; timeUnit: 'Min' | 'H'; customVal: string } {
+  const fallback = duration || '';
+  const match = fallback.trim().match(/^([0-9.]+)\s*(min|mins|minute|minutes|h|hr|hrs|hour|hours)$/i);
+  if (!match) return { tagType: 'custom', timeVal: '15', timeUnit: 'Min', customVal: fallback };
+  const unit = match[2].toLowerCase().startsWith('h') ? 'H' : 'Min';
+  return { tagType: 'time', timeVal: match[1], timeUnit: unit, customVal: '' };
+}
+
+function formatDurationDraft(tagType: 'time' | 'custom', timeVal: string, timeUnit: 'Min' | 'H', customVal: string) {
+  return tagType === 'time' ? `${timeVal || '0'} ${timeUnit}` : customVal.trim();
+}
+
+function normalizeColorIdx(value: unknown, fallback = 0) {
+  if (!Number.isInteger(value)) return fallback;
+  return ((Number(value) % TASK_COLORS.length) + TASK_COLORS.length) % TASK_COLORS.length;
+}
 
 function UnitDropdown({ value, onChange }: { value: 'Min' | 'H'; onChange: (v: 'Min' | 'H') => void }) {
   const [open, setOpen] = useState(false);
@@ -205,14 +223,11 @@ export default function App() {
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [spinningCards, setSpinningCards] = useState<string[]>([]);
   const [expandedCalDay, setExpandedCalDay] = useState<number | null>(null);
-  const [editTaskTime, setEditTaskTime] = useState<{ id: string, name: string, isCustom: boolean } | null>(null);
-  const [editTagType, setEditTagType] = useState<'time' | 'custom'>('time');
-  const [editTimeVal, setEditTimeVal] = useState('15');
-  const [editTimeUnit, setEditTimeUnit] = useState<'Min' | 'H'>('Min');
-  const [editDurationValue, setEditDurationValue] = useState("");
-  const [renameHabitItem, setRenameHabitItem] = useState<{ id: string, name: string, isCustom: boolean } | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  const [editingTask, setEditingTask] = useState<EditingTask | null>(null);
+  const [pressedTaskId, setPressedTaskId] = useState<string | null>(null);
   const [showResetModal, setShowResetModal] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = useRef(false);
 
 
   const [hasOnboarded, setHasOnboarded] = useState(() => localStorage.getItem('jellybean_has_onboarded') === 'true');
@@ -224,11 +239,28 @@ export default function App() {
         const parsed = JSON.parse(saved);
         // Wipe test data by bumping version to 2
         if (parsed.version !== 2) throw new Error('reset state');
-        if (!parsed.customTasks) parsed.customTasks = [];
+        if (!Array.isArray(parsed.customTasks)) parsed.customTasks = [];
+        parsed.customTasks = parsed.customTasks
+          .filter((task: any) => task && typeof task.name === 'string')
+          .map((task: any) => ({
+            id: String(task.id || Date.now()),
+            name: task.name,
+            subtitle: typeof task.subtitle === 'string' ? task.subtitle : '',
+            duration: typeof task.duration === 'string' ? task.duration : '',
+            icon: typeof task.icon === 'string' && ICON_MAP[task.icon] ? task.icon : 'star',
+            colorIdx: normalizeColorIdx(task.colorIdx),
+          }));
+        if (!parsed.progress || typeof parsed.progress !== 'object') parsed.progress = {};
         // ensure all progress entries have customDone
         Object.keys(parsed.progress).forEach(k => {
-          if (!parsed.progress[k].customDone) parsed.progress[k].customDone = [];
+          if (!parsed.progress[k] || typeof parsed.progress[k] !== 'object') parsed.progress[k] = {};
+          if (!Array.isArray(parsed.progress[k].customDone)) parsed.progress[k].customDone = [];
         });
+        if (parsed.habitOverrides && typeof parsed.habitOverrides === 'object') {
+          Object.values(parsed.habitOverrides).forEach((override: any) => {
+            if (override && typeof override === 'object' && 'colorIdx' in override) override.colorIdx = normalizeColorIdx(override.colorIdx);
+          });
+        }
         return parsed;
       } catch (e) { console.error(e); }
     }
@@ -344,11 +376,68 @@ export default function App() {
   }, []);
 
   const deleteTask = useCallback((taskId: string) => {
-    setState(prev => ({ ...prev, customTasks: prev.customTasks.filter(t => t.id !== taskId) }));
+    setState(prev => ({
+      ...prev,
+      customTasks: prev.customTasks.filter(t => t.id !== taskId),
+      progress: Object.fromEntries((Object.entries(prev.progress) as [string, DayProgress][]).map(([day, dp]) => [
+        day,
+        { ...dp, customDone: (dp.customDone || []).filter(id => id !== taskId) }
+      ])),
+    }));
+  }, []);
+
+  const getDefaultCard = useCallback((type: HabitType) => {
+    const meta = HABIT_META[type];
+    const override = state.habitOverrides?.[type];
+    const normalizedColorIdx = normalizeColorIdx(override?.colorIdx, Math.max(0, TASK_COLORS.findIndex(c => c.bg === meta.bg)));
+    const overrideColor = typeof override?.colorIdx === 'number' ? TASK_COLORS[normalizedColorIdx] : null;
+    return {
+      name: override?.label || meta.line1,
+      subtitle: override?.subtitle ?? meta.line2,
+      duration: override?.duration || meta.duration,
+      colorIdx: normalizedColorIdx,
+      bg: overrideColor?.bg || meta.bg,
+      text: overrideColor?.text || meta.text,
+      icon: meta.icon,
+    };
+  }, [state.habitOverrides]);
+
+  const startLongPress = useCallback((task: EditingTask, taskId: string) => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTriggeredRef.current = false;
+    setPressedTaskId(taskId);
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      setPressedTaskId(null);
+      setEditingTask(task);
+      if ('vibrate' in navigator) navigator.vibrate(10);
+    }, 600);
+  }, []);
+
+  const finishLongPress = useCallback((onTap: () => void) => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    setPressedTaskId(null);
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    onTap();
+  }, []);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    setPressedTaskId(null);
+    longPressTriggeredRef.current = false;
   }, []);
 
   const handleReset = useCallback(() => {
-    const fresh: ChallengeState = { startDate: format(new Date(), 'yyyy-MM-dd'), progress: {}, customTasks: [], version: 1 };
+    const fresh: ChallengeState = { startDate: format(new Date(), 'yyyy-MM-dd'), progress: {}, customTasks: [], version: 2 };
     setState(fresh);
     localStorage.setItem('jellybean_pro_state', JSON.stringify(fresh));
     setSheet(null);
@@ -407,28 +496,25 @@ export default function App() {
 
         <div style={{ paddingBottom: 40 }}>
           {HABITS.map(type => {
-            const m = HABIT_META[type];
+            const card = getDefaultCard(type);
             const isDone = todayProgress[type];
             const isSpinning = spinningCards.includes(type);
             return (
               <motion.div key={type} 
-                whileTap={{ scale: 0.97 }} onClick={() => toggleHabit(currentDay, type)}
-                className={`habit-card ${isSpinning ? 'animate-spin-vertical' : ''}`} style={{ backgroundColor: m.bg, color: m.text, cursor: 'pointer' }}>
+                animate={{ scale: pressedTaskId === type ? 0.97 : 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                onPointerDown={() => startLongPress({ kind: 'default', id: type }, type)}
+                onPointerUp={() => finishLongPress(() => toggleHabit(currentDay, type))}
+                onPointerCancel={cancelLongPress}
+                onPointerLeave={cancelLongPress}
+                className={`habit-card ${isSpinning ? 'animate-spin-vertical' : ''}`} style={{ backgroundColor: card.bg, color: card.text, cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div><p className={`habit-title ${isDone ? 'strikethrough' : ''}`}>{m.line1}</p><p className={`habit-title ${isDone ? 'strikethrough' : ''}`}>{m.line2}</p></div>
-                  <div className="habit-icon-circle">{isDone ? <Check size={20} strokeWidth={3}/> : m.icon}</div>
+                  <div><p className={`habit-title ${isDone ? 'strikethrough' : ''}`}>{card.name}</p>{card.subtitle && <p className={`habit-title ${isDone ? 'strikethrough' : ''}`}>{card.subtitle}</p>}</div>
+                  <div className="habit-icon-circle">{isDone ? <Check size={20} strokeWidth={3}/> : card.icon}</div>
                 </div>
                 <div className="habit-bottom">
                   <span className="habit-time">{isDone ? '✓ Completed' : '○ Pending'}</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditDurationValue(state.habitOverrides?.[type]?.duration || m.duration);
-                      setEditTaskTime({ id: type, name: m.label, isCustom: false });
-                    }}
-                    className="habit-duration-badge" style={{ border: 'none', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
-                    {state.habitOverrides?.[type]?.duration || m.duration}
-                  </button>
+                  <span className="habit-duration-badge">{card.duration}</span>
                   <span className="habit-time" style={{ marginLeft: 'auto' }}>{isDone ? 'Done' : 'Tap to log'}</span>
                 </div>
               </motion.div>
@@ -436,15 +522,20 @@ export default function App() {
           })}
 
           {state.customTasks.map(task => {
-            const col = TASK_COLORS[task.colorIdx % TASK_COLORS.length];
+            const col = TASK_COLORS[normalizeColorIdx(task.colorIdx)];
             const isDone = todayProgress.customDone.includes(task.id);
             const icon = ICON_MAP[task.icon] || ICON_MAP.star;
             const isSpinning = spinningCards.includes(task.id);
             return (
               <motion.div key={task.id} 
-                whileTap={{ scale: 0.97 }} onClick={() => toggleCustom(currentDay, task.id)}
+                animate={{ scale: pressedTaskId === task.id ? 0.97 : 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                onPointerDown={() => startLongPress({ kind: 'custom', id: task.id }, task.id)}
+                onPointerUp={() => finishLongPress(() => toggleCustom(currentDay, task.id))}
+                onPointerCancel={cancelLongPress}
+                onPointerLeave={cancelLongPress}
                 className={`habit-card ${isSpinning ? 'animate-spin-vertical' : ''}`} style={{ backgroundColor: col.bg, color: col.text, cursor: 'pointer' }}>
-                <button className="delete-task-btn" onClick={e => { e.stopPropagation(); deleteTask(task.id); }}>
+                <button className="delete-task-btn" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); deleteTask(task.id); }}>
                   <Trash2 size={12} color="#fff"/>
                 </button>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -456,15 +547,7 @@ export default function App() {
                 </div>
                 <div className="habit-bottom">
                   <span className="habit-time">{isDone ? '✓ Completed' : '○ Pending'}</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditDurationValue(task.duration || 'Custom');
-                      setEditTaskTime({ id: task.id, name: task.name, isCustom: true });
-                    }}
-                    className="habit-duration-badge" style={{ border: 'none', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
-                    {task.duration || 'Custom'}
-                  </button>
+                  <span className="habit-duration-badge">{task.duration || 'Custom'}</span>
                   <span className="habit-time" style={{ marginLeft: 'auto' }}>{isDone ? 'Done' : 'Tap to log'}</span>
                 </div>
               </motion.div>
@@ -611,8 +694,7 @@ export default function App() {
     return (
       <div className="animate-fade-in" style={{ paddingBottom: 60 }}>
         <div className="px-6 pt-4 pb-4">
-          <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '1.75rem' }}>Daily Thoughts</h2>
-          <p style={{ fontSize: 13, color: '#A0A0A0', marginTop: 4 }}>Your challenge commentary timeline</p>
+          <p style={{ fontFamily: 'var(--font-display)', fontSize: '1.65rem', color: '#A0A0A0', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Your challenge timeline</p>
         </div>
 
         {savedNotes.length > 0 ? (
@@ -649,6 +731,7 @@ export default function App() {
     const habitStats: Record<string, number> = {};
     HABITS.forEach(h => habitStats[h] = 0);
     state.customTasks.forEach(t => habitStats[t.id] = 0);
+    const moodPalette = [CAL_COLORS[3], CAL_COLORS[2], CAL_COLORS[0], CAL_COLORS[4]];
 
     const weekMoodData: { dayName: string, moodVal: number, moodLabel: string }[] = [];
     for (let i = Math.max(1, currentDay - 6); i <= currentDay; i++) {
@@ -681,7 +764,7 @@ export default function App() {
         <div className="px-6 space-y-6">
           
           {/* This Week Mood Chart */}
-          <div style={{ backgroundColor: '#F9F8F6', borderRadius: 32, padding: 24, boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
+          <div style={{ background: 'linear-gradient(180deg, #FFFDF9 0%, #F6F1EA 100%)', borderRadius: 32, padding: 24, boxShadow: '0 8px 28px rgba(90,72,44,0.06)', border: '1px solid rgba(239,235,228,0.75)' }}>
             <h3 style={{ fontSize: 16, fontWeight: 800, textTransform: 'uppercase', color: '#1A1A1A', marginBottom: 32 }}>This Week's Mood</h3>
 
             <div style={{ display: 'flex', height: 160, position: 'relative', marginTop: 16 }}>
@@ -691,8 +774,8 @@ export default function App() {
                   const m = MOODS.find(x => x.value === v);
                   return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                      <span style={{ fontSize: 12, color: '#A0A0A0', width: 24, textAlign: 'center' }}>{m?.emoji}</span>
-                      <div style={{ flex: 1, borderTop: '1px dashed #E0DDD6' }} />
+                      <span style={{ fontSize: 13, opacity: 0.72, width: 24, textAlign: 'center' }}>{m?.emoji}</span>
+                      <div style={{ flex: 1, borderTop: '1px solid rgba(212,208,200,0.42)' }} />
                     </div>
                   );
                 })}
@@ -703,9 +786,10 @@ export default function App() {
                 {weekMoodData.map((d, i) => {
                   const hPct = (d.moodVal / 4) * 100;
                   const isToday = i === weekMoodData.length - 1 && d.dayName !== '-';
+                  const tone = d.moodVal ? moodPalette[d.moodVal - 1] : null;
                   return (
                     <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%', justifyContent: 'flex-end', flex: 1 }}>
-                      <div style={{ width: '60%', minWidth: 16, maxWidth: 32, height: `${hPct}%`, minHeight: hPct > 0 ? 4 : 0, backgroundColor: isToday ? '#1A1A1A' : '#D4D0C8', borderRadius: 8, transition: 'height 0.5s ease-out' }} />
+                      <div style={{ width: '62%', minWidth: 16, maxWidth: 34, height: `${hPct}%`, minHeight: hPct > 0 ? 8 : 0, background: tone ? `linear-gradient(180deg, ${tone.bg} 0%, ${tone.tag} 100%)` : 'transparent', opacity: isToday ? 1 : 0.78, borderRadius: '999px 999px 10px 10px', boxShadow: tone ? `0 10px 18px ${tone.bg}55` : 'none', transition: 'height 0.5s ease-out' }} />
                       <span style={{ fontSize: 10, fontWeight: 700, color: '#6B6B6B', position: 'absolute', bottom: -4 }}>{d.dayName}</span>
                     </div>
                   );
@@ -745,7 +829,7 @@ export default function App() {
                 const isTimeTracked = hrsPerDay > 0;
                 const totalPossible = isTimeTracked ? 75 * hrsPerDay : 75;
                 const currentAccumulated = isTimeTracked ? habitStats[t.id] * hrsPerDay : habitStats[t.id];
-                const col = TASK_COLORS[t.colorIdx % TASK_COLORS.length];
+                const col = TASK_COLORS[normalizeColorIdx(t.colorIdx)];
                 
                 return (
                   <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: '16px', borderRadius: 20 }}>
@@ -825,6 +909,7 @@ export default function App() {
     const [customVal, setCustomVal] = useState('');
     const [icon, setIcon] = useState('star');
     const [colorIdx, setColorIdx] = useState(0);
+    const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
 
     const finalDuration = tagType === 'time' ? `${timeVal} ${timeUnit}` : customVal;
 
@@ -876,15 +961,39 @@ export default function App() {
         {/* Icon Picker */}
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em', display: 'block', marginBottom: 8 }}>Choose Icon</label>
-          <div className="icon-grid">
-            {ICON_KEYS.map(k => (
-              <button key={k} onClick={() => setIcon(k)}
-                className={`icon-cell ${icon === k ? 'icon-cell-active' : ''}`}
-                style={{ color: icon === k ? '#2D2D2D' : '#6B6B6B', border: 'none' }}>
-                {ICON_MAP[k]}
-              </button>
-            ))}
-          </div>
+          <button
+            onClick={() => setIsIconPickerOpen(v => !v)}
+            style={{ width: '100%', padding: '12px 14px', borderRadius: 18, border: '1px solid #E0DDD6', backgroundColor: '#EFEBE4', color: '#2D2D2D', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 700 }}>
+              <span className="habit-icon-circle" style={{ width: 32, height: 32 }}>{ICON_MAP[icon]}</span>
+              Selected Icon
+            </span>
+            <motion.span animate={{ rotate: isIconPickerOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
+              <ChevronDown size={16} color="#A0A0A0" />
+            </motion.span>
+          </button>
+          <AnimatePresence initial={false}>
+            {isIconPickerOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.24, ease: 'easeOut' }}
+                style={{ overflow: 'hidden' }}
+              >
+                <div className="icon-grid" style={{ paddingTop: 10 }}>
+                  {ICON_KEYS.map(k => (
+                    <button key={k} onClick={() => { setIcon(k); setIsIconPickerOpen(false); }}
+                      className={`icon-cell ${icon === k ? 'icon-cell-active' : ''}`}
+                      style={{ color: icon === k ? '#2D2D2D' : '#6B6B6B', border: 'none' }}>
+                      {ICON_MAP[k]}
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Color Picker */}
@@ -901,7 +1010,7 @@ export default function App() {
 
         {/* Preview */}
         {name && (
-          <div className="habit-card" style={{ backgroundColor: TASK_COLORS[colorIdx].bg, color: TASK_COLORS[colorIdx].text, margin: 0, cursor: 'default' }}>
+          <div className="habit-card" style={{ backgroundColor: TASK_COLORS[normalizeColorIdx(colorIdx)].bg, color: TASK_COLORS[normalizeColorIdx(colorIdx)].text, margin: 0, cursor: 'default' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <p className="habit-title">{name}</p>
@@ -928,6 +1037,147 @@ export default function App() {
   };
 
   // ═══ POMODORO SHEET ═══
+  const EditTaskModal = ({ task }: { task: EditingTask }) => {
+    const isCustom = task.kind === 'custom';
+    const customTask = isCustom ? state.customTasks.find(t => t.id === task.id) : null;
+    const defaultCard = !isCustom ? getDefaultCard(task.id) : null;
+    const initialName = customTask?.name || defaultCard?.name || '';
+    const initialSubtitle = customTask?.subtitle || defaultCard?.subtitle || '';
+    const initialDuration = customTask?.duration || defaultCard?.duration || '';
+    const initialColorIdx = customTask?.colorIdx ?? defaultCard?.colorIdx ?? 0;
+    const icon = customTask ? (ICON_MAP[customTask.icon] || ICON_MAP.star) : defaultCard?.icon;
+    const [name, setName] = useState(initialName);
+    const [subtitle, setSubtitle] = useState(initialSubtitle);
+    const initialDraft = parseDurationDraft(initialDuration);
+    const [tagType, setTagType] = useState<'time' | 'custom'>(initialDraft.tagType);
+    const [timeVal, setTimeVal] = useState(initialDraft.timeVal);
+    const [timeUnit, setTimeUnit] = useState<'Min' | 'H'>(initialDraft.timeUnit);
+    const [customVal, setCustomVal] = useState(initialDraft.customVal);
+    const [colorIdx, setColorIdx] = useState(normalizeColorIdx(initialColorIdx));
+    const color = TASK_COLORS[normalizeColorIdx(colorIdx)];
+    const finalDuration = formatDurationDraft(tagType, timeVal, timeUnit, customVal) || 'Custom';
+
+    if (isCustom && !customTask) return null;
+
+    const saveEdit = () => {
+      const cleanName = name.trim();
+      if (!cleanName) return;
+      const cleanSubtitle = subtitle.trim();
+      const cleanDuration = finalDuration.trim();
+
+      if (isCustom) {
+        setState(s => ({
+          ...s,
+          customTasks: s.customTasks.map(ct => ct.id === task.id ? {
+            ...ct,
+            name: cleanName,
+            subtitle: cleanSubtitle,
+            duration: cleanDuration,
+            colorIdx,
+          } : ct)
+        }));
+      } else {
+        setState(s => ({
+          ...s,
+          habitOverrides: {
+            ...(s.habitOverrides || {}),
+            [task.id]: {
+              ...(s.habitOverrides?.[task.id] || {}),
+              label: cleanName,
+              subtitle: cleanSubtitle,
+              duration: cleanDuration,
+              colorIdx,
+            }
+          }
+        }));
+      }
+      setEditingTask(null);
+    };
+
+    return (
+      <div className="sheet-overlay modal-overlay" onClick={() => setEditingTask(null)}>
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0, y: 12 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.95, opacity: 0, y: 12 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+          onClick={e => e.stopPropagation()}
+          className="modal-content task-edit-modal"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 22, fontWeight: 800, color: '#1A1A1A', fontFamily: 'var(--font-display)', lineHeight: 1 }}>Edit Task</h3>
+            <button onClick={() => setEditingTask(null)} style={{ color: '#A0A0A0', cursor: 'pointer', background: 'none', border: 'none', padding: 4 }}><X size={20}/></button>
+          </div>
+
+          <motion.div layout className="habit-card" style={{ backgroundColor: color.bg, color: color.text, margin: '0 0 22px', cursor: 'default' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <p className="habit-title">{name.trim() || 'Task Name'}</p>
+                {subtitle.trim() && <p className="habit-title">{subtitle}</p>}
+              </div>
+              <div className="habit-icon-circle">{icon}</div>
+            </div>
+            <div className="habit-bottom"><span className="habit-time">○ Pending</span><span className="habit-duration-badge">{finalDuration}</span></div>
+          </motion.div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em', display: 'block', marginBottom: 8 }}>Task Name</label>
+                <input autoFocus value={name} onChange={e => setName(e.target.value)}
+                  style={{ width: '100%', padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em', display: 'block', marginBottom: 8 }}>Subtitle</label>
+                <input value={subtitle} onChange={e => setSubtitle(e.target.value)}
+                  style={{ width: '100%', padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none' }} />
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em' }}>Duration</label>
+                <SegmentedToggle
+                  value={tagType}
+                  onChange={(v: 'time' | 'custom') => setTagType(v)}
+                  options={[{ value: 'time', label: 'Time' }, { value: 'custom', label: 'Custom' }]}
+                  layoutId="segment-edit-task"
+                />
+              </div>
+              {tagType === 'time' ? (
+                <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+                  <input type="number" value={timeVal} onChange={e => setTimeVal(e.target.value)} placeholder="15"
+                    style={{ flex: 1, minWidth: 0, padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none' }} />
+                  <UnitDropdown value={timeUnit} onChange={setTimeUnit} />
+                </div>
+              ) : (
+                <input value={customVal} onChange={e => setCustomVal(e.target.value)} placeholder="e.g. Daily, Morning..."
+                  style={{ width: '100%', padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none' }} />
+              )}
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em', display: 'block', marginBottom: 8 }}>Card Color</label>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {TASK_COLORS.map((c, i) => (
+                  <button key={i} onClick={() => setColorIdx(i)}
+                    className={`color-dot ${colorIdx === i ? 'color-dot-active' : ''}`}
+                    style={{ backgroundColor: c.bg, border: 'none' }} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
+            <button onClick={() => setEditingTask(null)} style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: '#F9F8F6', border: 'none', fontWeight: 800, color: '#A0A0A0', cursor: 'pointer' }}>Cancel</button>
+            <button disabled={!name.trim()} onClick={saveEdit}
+              style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: name.trim() ? '#1A1A1A' : '#E0DDD6', border: 'none', fontWeight: 800, color: name.trim() ? '#fff' : '#A0A0A0', cursor: name.trim() ? 'pointer' : 'default' }}>Save</button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  };
+
   const PomodoroSheet = () => {
     const [focusMins, setFocusMins] = useState(25);
     const [breakMins, setBreakMins] = useState(5);
@@ -1026,24 +1276,6 @@ export default function App() {
           <div className="stat-card">
             <span className="stat-value">{Math.round(((Object.values(state.progress) as DayProgress[]).reduce((a: number, d: DayProgress) => a + HABITS.filter(h => d[h]).length, 0) as number) / (75 * 5) * 100)}%</span>
             <span className="stat-label">Total</span>
-          </div>
-        </div>
-
-        <div>
-          <h3 style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Manage Habits</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {HABITS.map(h => (
-              <div key={h} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', backgroundColor: '#F9F8F6', borderRadius: 16 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>{state.habitOverrides?.[h]?.label || HABIT_META[h].label}</span>
-                <button onClick={() => { setRenameValue(state.habitOverrides?.[h]?.label || HABIT_META[h].label); setRenameHabitItem({ id: h, name: HABIT_META[h].label, isCustom: false }); setSheet(null); }} style={{ background: 'none', border: 'none', color: '#A0A0A0', cursor: 'pointer' }}><Pen size={14} /></button>
-              </div>
-            ))}
-            {state.customTasks.map(t => (
-              <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', backgroundColor: '#F9F8F6', borderRadius: 16 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>{t.name}</span>
-                <button onClick={() => { setRenameValue(t.name); setRenameHabitItem({ id: t.id, name: t.name, isCustom: true }); setSheet(null); }} style={{ background: 'none', border: 'none', color: '#A0A0A0', cursor: 'pointer' }}><Pen size={14} /></button>
-              </div>
-            ))}
           </div>
         </div>
 
@@ -1180,75 +1412,7 @@ export default function App() {
           </>
         )}
         
-        {editTaskTime && (
-          <div className="sheet-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditTaskTime(null)}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-              onClick={e => e.stopPropagation()}
-              style={{ backgroundColor: '#fff', borderRadius: 32, padding: 24, width: '85%', maxWidth: 320, boxShadow: '0 24px 48px rgba(0,0,0,0.15)' }}>
-              <h3 style={{ fontSize: 20, fontWeight: 800, color: '#1A1A1A', fontFamily: 'var(--font-display)', lineHeight: 1, marginBottom: 8 }}>Edit Time</h3>
-              <p style={{ fontSize: 13, color: '#A0A0A0', marginBottom: 24, fontWeight: 500 }}>Set the duration for {editTaskTime.name}.</p>
-              
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#A0A0A0', textTransform: 'uppercase' as const, letterSpacing: '0.1em' }}>Duration Badge</label>
-                <SegmentedToggle
-                  value={editTagType}
-                  onChange={(v: 'time' | 'custom') => setEditTagType(v)}
-                  options={[{ value: 'time', label: 'Time' }, { value: 'custom', label: 'Custom' }]}
-                  layoutId="segment-edit"
-                />
-              </div>
-              
-              {editTagType === 'time' ? (
-                <div style={{ display: 'flex', gap: 12, marginBottom: 24, width: '100%' }}>
-                  <input type="number" value={editTimeVal} onChange={e => setEditTimeVal(e.target.value)} placeholder="15"
-                    style={{ flex: 1, minWidth: 0, padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none' }} />
-                  <UnitDropdown value={editTimeUnit} onChange={setEditTimeUnit} />
-                </div>
-              ) : (
-                <input value={editDurationValue} onChange={e => setEditDurationValue(e.target.value)} placeholder="e.g. Daily, Morning..."
-                  style={{ width: '100%', padding: '12px 16px', borderRadius: 16, border: '1px solid #E0DDD6', fontSize: 14, fontWeight: 600, backgroundColor: '#EFEBE4', outline: 'none', marginBottom: 24 }} />
-              )}
-              
-              <div style={{ display: 'flex', gap: 12 }}>
-                <button onClick={() => setEditTaskTime(null)} style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: '#F9F8F6', border: 'none', fontWeight: 800, color: '#A0A0A0', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => {
-                  const finalDur = editTagType === 'time' ? `${editTimeVal} ${editTimeUnit}` : editDurationValue;
-                  if (editTaskTime.isCustom) {
-                    setState(s => ({ ...s, customTasks: s.customTasks.map(ct => ct.id === editTaskTime.id ? { ...ct, duration: finalDur } : ct) }));
-                  } else {
-                    setState(s => ({ ...s, habitOverrides: { ...(s.habitOverrides || {}), [editTaskTime.id]: { duration: finalDur } } }));
-                  }
-                  setEditTaskTime(null);
-                }} style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: '#1A1A1A', border: 'none', fontWeight: 800, color: '#fff', cursor: 'pointer' }}>Save</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
-        {renameHabitItem && (
-          <div className="sheet-overlay modal-overlay" onClick={() => setRenameHabitItem(null)}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-              onClick={e => e.stopPropagation()} className="modal-content">
-              <h3 style={{ fontSize: 20, fontWeight: 800, color: '#1A1A1A', fontFamily: 'var(--font-display)', lineHeight: 1, marginBottom: 8 }}>Rename Habit</h3>
-              <p style={{ fontSize: 13, color: '#A0A0A0', marginBottom: 24, fontWeight: 500 }}>Enter a new name for {renameHabitItem.name}.</p>
-              
-              <input autoFocus type="text" value={renameValue} onChange={e => setRenameValue(e.target.value)}
-                style={{ width: '100%', padding: '16px', borderRadius: 16, border: '1px solid #EFEBE4', backgroundColor: '#F9F8F6', outline: 'none', fontSize: 15, fontWeight: 700, color: '#1A1A1A', marginBottom: 24 }} />
-              
-              <div style={{ display: 'flex', gap: 12 }}>
-                <button onClick={() => setRenameHabitItem(null)} style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: '#F9F8F6', border: 'none', fontWeight: 800, color: '#A0A0A0', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => {
-                  if (renameHabitItem.isCustom) {
-                    setState(s => ({ ...s, customTasks: s.customTasks.map(ct => ct.id === renameHabitItem.id ? { ...ct, name: renameValue } : ct) }));
-                  } else {
-                    setState(s => ({ ...s, habitOverrides: { ...(s.habitOverrides || {}), [renameHabitItem.id]: { ...(s.habitOverrides?.[renameHabitItem.id as HabitType] || {}), label: renameValue } } }));
-                  }
-                  setRenameHabitItem(null);
-                }} style={{ flex: 1, padding: '14px', borderRadius: 16, backgroundColor: '#1A1A1A', border: 'none', fontWeight: 800, color: '#fff', cursor: 'pointer' }}>Save</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+        {editingTask && <EditTaskModal task={editingTask} />}
 
         {showResetModal && (
           <div className="sheet-overlay modal-overlay" onClick={() => setShowResetModal(false)}>

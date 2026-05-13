@@ -306,3 +306,9 @@
   @apply bg-white rounded-[32px] p-6 w-[85%] max-w-[320px] relative;
   box-shadow: 0 24px 48px rgba(0,0,0,0.15);
 }
+.task-edit-modal {
+  width: min(92vw, 380px);
+  max-width: 380px;
+  max-height: 88vh;
+  overflow-y: auto;
+}

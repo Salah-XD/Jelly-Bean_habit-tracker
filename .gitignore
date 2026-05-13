@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Agent handoff/context files
+handover.md

@@ -40,7 +40,7 @@ export interface ChallengeState {
   progress: Record<number, DayProgress>;
   customTasks: CustomTask[];
   version: number;
-  habitOverrides?: Partial<Record<HabitType, { duration?: string; label?: string; subtitle?: string }>>;
+  habitOverrides?: Partial<Record<HabitType, { duration?: string; label?: string; subtitle?: string; colorIdx?: number }>>;
 }
 
 export const DEFAULT_DAY: DayProgress = {
@@ -58,10 +58,10 @@ export const HABIT_META: Record<HabitType, {
   bg: string; text: string;
 }> = {
   workout: { icon: <Dumbbell size={20} />, label: 'Workout', line1: 'Active', line2: 'Workout', duration: '45 Min', bg: '#DDB96E', text: '#4A3810' },
-  diet: { icon: <Apple size={20} />, label: 'Meals', line1: 'Clean', line2: 'Meals', duration: 'All Day', bg: '#D4A0A8', text: '#4A1F27' },
+  diet: { icon: <Apple size={20} />, label: 'Meals', line1: 'Clean', line2: 'Meals', duration: 'Daily', bg: '#D4A0A8', text: '#4A1F27' },
   book: { icon: <BookOpen size={20} />, label: 'Reading', line1: 'Read 10', line2: 'Pages', duration: '20 Min', bg: '#B8AED4', text: '#2D2650' },
   water: { icon: <Droplets size={20} />, label: 'Water', line1: '1.5 Litre', line2: 'Hydration', duration: 'Daily', bg: '#7CC4B8', text: '#14403A' },
-  photo: { icon: <Camera size={20} />, label: 'Photo', line1: 'Progress', line2: 'Photo', duration: '5 Min', bg: '#B8C89C', text: '#2E3E1C' },
+  photo: { icon: <Camera size={20} />, label: 'Photo', line1: 'Progress', line2: 'Photo', duration: 'Daily', bg: '#B8C89C', text: '#2E3E1C' },
 };
 
 // ═══ CALENDAR COLORS ═══
