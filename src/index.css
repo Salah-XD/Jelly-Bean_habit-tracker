@@ -1,0 +1,308 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-main: #EFEBE4;
+  --color-bg-card: #FFFFFF;
+  --color-text-dark: #1A1A1A;
+  --color-text-mid: #6B6B6B;
+  --color-text-light: #A0A0A0;
+  --color-border: #E0DDD6;
+  --color-tab-active: #2D2D2D;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-display: "DM Serif Display", serif;
+}
+
+@layer base {
+  body {
+    @apply bg-bg-main text-text-dark font-sans antialiased;
+    overscroll-behavior: none;
+  }
+  * { 
+    -webkit-tap-highlight-color: transparent; 
+    user-select: none;
+  }
+  input, textarea {
+    user-select: text;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    appearance: textfield;
+  }
+}
+
+/* App shell */
+.app-shell {
+  @apply min-h-screen max-w-md mx-auto relative overflow-x-hidden;
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+
+/* Tab bar */
+.tab-bar { @apply flex items-center gap-2 px-6 pt-10 pb-4 flex-wrap; }
+.tab-pill { @apply px-5 py-2.5 rounded-full text-sm font-semibold transition-colors duration-200 cursor-pointer; -webkit-tap-highlight-color: transparent; }
+.tab-add {
+  @apply w-10 h-10 rounded-full border border-border bg-bg-card flex items-center justify-center text-text-mid
+         hover:bg-white transition-colors cursor-pointer ml-auto;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Date display */
+.date-section { @apply px-6 py-6; }
+.day-label { @apply text-base font-medium text-text-mid mb-1; }
+.date-row { @apply flex items-end justify-between; }
+.date-big { font-family: var(--font-display); @apply text-7xl leading-none tracking-tight text-text-dark; }
+.date-month { font-family: var(--font-display); @apply text-5xl leading-none text-text-dark; }
+.date-info { @apply text-right space-y-2; }
+.date-info-value { @apply text-sm font-semibold text-text-dark; }
+.date-info-label { @apply text-xs text-text-light; }
+.date-divider { @apply w-px h-10 bg-border mx-4; }
+
+/* Section headers */
+.section-head { @apply flex items-center justify-between px-6 pb-3 pt-2; }
+.section-title { @apply text-base font-semibold text-text-dark; }
+.section-badge { @apply text-sm text-text-light font-medium; }
+
+/* Habit / Task cards */
+.habit-card {
+  @apply rounded-3xl p-5 mb-4 mx-6 cursor-pointer transition-all duration-200 relative overflow-hidden;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.habit-card:active { transform: scale(0.97); }
+.habit-title { font-family: var(--font-display); @apply text-2xl leading-tight; }
+.habit-icon-circle { @apply w-10 h-10 rounded-full flex items-center justify-center; background: rgba(255,255,255,0.35); }
+.habit-bottom { @apply flex items-center gap-3 mt-4 pt-3; border-top: 1px solid rgba(0,0,0,0.08); }
+.habit-time { @apply text-xs font-medium opacity-70; }
+.habit-duration-badge { @apply px-3 py-1 rounded-full text-xs font-semibold; background: rgba(255,255,255,0.4); }
+
+/* Calendar */
+.month-nav { @apply flex items-center justify-center gap-6 px-6 py-4; }
+.month-label { @apply text-lg font-semibold text-text-dark; }
+.month-label-muted { @apply text-lg font-medium text-text-light; }
+.cal-card {
+  @apply rounded-3xl p-5 mb-4 mx-6 relative overflow-hidden;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.cal-day-name { @apply text-sm font-medium opacity-70 mb-1; }
+.cal-day-num { font-family: var(--font-display); @apply text-5xl leading-none; }
+.cal-month { font-family: var(--font-display); @apply text-3xl leading-none; }
+.cal-time-row { @apply flex items-center gap-2 mt-3 flex-wrap; }
+.cal-tag { @apply px-3 py-1 rounded-full text-xs font-semibold text-white; }
+.cal-add-btn {
+  @apply w-7 h-7 rounded-full border flex items-center justify-center text-xs opacity-40 hover:opacity-70 transition-opacity;
+  border-color: rgba(0,0,0,0.15);
+}
+
+/* Note preview on calendar */
+.cal-note-preview {
+  @apply mt-3 pt-3 text-xs font-medium opacity-60 leading-relaxed;
+  border-top: 1px solid rgba(0,0,0,0.06);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* Bottom sheet */
+.sheet-overlay { @apply fixed inset-0 z-50; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); }
+.sheet-content {
+  @apply fixed bottom-0 left-0 right-0 z-50 bg-bg-card rounded-t-3xl max-w-md mx-auto;
+  max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 -10px 40px rgba(0,0,0,0.15);
+  padding-bottom: env(safe-area-inset-bottom, 24px);
+}
+.sheet-handle { @apply w-10 h-1 rounded-full bg-border mx-auto mt-3 mb-4; }
+
+/* Notes page */
+.note-card {
+  @apply bg-bg-card rounded-2xl p-5 mb-3 mx-6;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.note-card-header { @apply flex items-center justify-between mb-2; }
+.note-day-badge {
+  @apply text-xs font-bold px-3 py-1 rounded-full;
+  background: rgba(0,0,0,0.06);
+}
+.note-text { @apply text-sm text-text-mid leading-relaxed; }
+.note-mood { @apply text-2xl; }
+.note-date { @apply text-xs text-text-light font-medium; }
+
+/* Journal textarea */
+.journal-textarea {
+  @apply w-full p-5 bg-white/40 border border-black/5 outline-none resize-none text-text-dark font-medium leading-relaxed transition-all duration-300;
+  min-height: 120px;
+  border-radius: 16px;
+}
+.journal-textarea:focus {
+  @apply bg-white border-black/10;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.02), 0 4px 20px rgba(0,0,0,0.05);
+}
+.journal-textarea::placeholder { @apply text-text-light/70 italic; }
+
+/* Mood buttons */
+.mood-btn { @apply flex flex-col items-center justify-center p-3 rounded-2xl transition-all flex-1 cursor-pointer; }
+.mood-btn-active { @apply bg-tab-active text-white; }
+.mood-btn-inactive { @apply bg-bg-main hover:bg-border; }
+
+/* Icon picker grid */
+.icon-grid {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;
+}
+.icon-cell {
+  @apply w-full aspect-square rounded-2xl flex items-center justify-center cursor-pointer transition-all;
+  background: rgba(0,0,0,0.04);
+}
+.icon-cell:hover { background: rgba(0,0,0,0.08); }
+.icon-cell-active { @apply ring-2 ring-tab-active; background: rgba(0,0,0,0.1); }
+
+/* Color picker */
+.color-dot {
+  @apply w-9 h-9 rounded-full cursor-pointer transition-all;
+}
+.color-dot:hover { transform: scale(1.15); }
+.color-dot-active { @apply ring-2 ring-offset-2 ring-tab-active; }
+
+/* Stat cards */
+.stat-card {
+  @apply bg-bg-card rounded-2xl p-5 flex flex-col items-center text-center;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.stat-value { font-family: var(--font-display); @apply text-3xl text-text-dark; }
+.stat-label { @apply text-xs font-semibold text-text-light uppercase tracking-widest mt-1; }
+
+/* Delete button on task cards */
+.delete-task-btn {
+  @apply absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-opacity opacity-0;
+  background: rgba(0,0,0,0.15);
+}
+.habit-card:hover .delete-task-btn { opacity: 1; }
+
+/* Reset button */
+.reset-btn {
+  @apply w-full flex items-center justify-center gap-2 p-4 text-red-500 font-semibold border border-red-200 rounded-2xl bg-red-50 hover:bg-red-100 transition-colors cursor-pointer;
+}
+
+/* Calendar Grid */
+.cal-grid {
+  @apply grid grid-cols-7 gap-2 px-6;
+}
+.cal-day-header {
+  @apply text-center text-xs font-bold text-text-light/50 pb-2 uppercase;
+}
+.cal-tile {
+  @apply aspect-square flex flex-col items-center justify-center relative overflow-hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.cal-tile-num {
+  font-family: var(--font-display);
+  @apply text-xl leading-none z-10;
+}
+.cal-tile-day-badge {
+  @apply text-[9px] font-bold opacity-60 z-10 uppercase mt-1;
+}
+.cal-tile-progress {
+  @apply absolute bottom-0 left-0 right-0 bg-black/10 transition-all duration-700;
+}
+.cal-tile-perfect {
+  @apply ring-2 ring-offset-2 ring-white/60;
+  animation: tileShine 3s infinite;
+}
+@keyframes tileShine {
+  0% { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  50% { box-shadow: 0 0 15px rgba(255, 255, 255, 0.8); }
+  100% { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+}
+
+/* Developer Time Travel Buttons */
+.dev-btn {
+  @apply flex-1 py-3 px-2 rounded-xl text-xs font-bold text-center bg-bg-card border border-border text-text-mid transition-all;
+}
+.dev-btn:active {
+  @apply bg-border transform scale-95;
+}
+
+/* Animations */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fadeIn 0.4s ease; }
+
+@keyframes spinVertical {
+  0% { transform: perspective(800px) rotateX(0deg); }
+  100% { transform: perspective(800px) rotateX(-360deg); }
+}
+.animate-spin-vertical {
+  animation: spinVertical 0.6s cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
+/* Shining effect for perfect days (Legacy/Fallback) */
+.cal-card-perfect {
+  @apply ring-2 ring-white/50;
+  animation: shine 3s infinite;
+}
+
+@keyframes shine {
+  0% { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+  50% { box-shadow: 0 0 25px rgba(255, 255, 255, 0.6); }
+  100% { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+}
+
+/* Progress indicator on calendar cards */
+.cal-progress-container {
+  @apply h-1.5 w-full bg-black/5 rounded-full mt-4 overflow-hidden;
+}
+.cal-progress-fill {
+  @apply h-full bg-white/40 transition-all duration-700;
+}
+
+/* Strikeout text */
+.strikethrough {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* ═══ POMODORO TIMER ═══ */
+.pomodoro-ring {
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+.pomodoro-circle-bg {
+  fill: none;
+  stroke: rgba(0,0,0,0.05);
+}
+.pomodoro-circle-progress {
+  fill: none;
+  stroke: #1A1A1A;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s linear;
+}
+
+/* ═══ STATS PAGE ═══ */
+.mood-chart-container {
+  @apply bg-bg-card rounded-3xl p-6 relative overflow-hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+}
+.habit-stat-card {
+  @apply flex items-center justify-between bg-bg-card rounded-2xl p-4 mb-3;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+}
+.habit-stat-progress-bg {
+  @apply h-2 w-full bg-border rounded-full overflow-hidden mt-2;
+}
+.habit-stat-progress-fill {
+  @apply h-full rounded-full transition-all duration-700 ease-out;
+}
+
+/* ═══ MODALS ═══ */
+.modal-overlay {
+  @apply fixed inset-0 z-[60] flex items-center justify-center;
+  background: rgba(0,0,0,0.4); 
+  backdrop-filter: blur(8px);
+}
+.modal-content {
+  @apply bg-white rounded-[32px] p-6 w-[85%] max-w-[320px] relative;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.15);
+}
